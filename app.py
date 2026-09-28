@@ -36,9 +36,6 @@ st.markdown(
         padding:8px;border-radius:6px;letter-spacing:2px}
     .scen-bear {background:#991b1b;color:#fff;font-weight:700;text-align:center;
         padding:8px;border-radius:6px;letter-spacing:2px}
-    .verdict {background:#161b22;border:1px solid #f0b429;border-radius:10px;
-        padding:18px;margin:10px 0}
-    .anchor {background:#161b22;border-radius:8px;padding:10px 14px;margin:6px 0}
     div[data-testid="stMetricValue"] {font-size:1.35rem}
     </style>
     """,
@@ -233,34 +230,31 @@ anchor_pe = co.get("trailing_pe") or 20.0
 with st.expander("📊 Auto-derived anchors — sanity checks for your inputs", expanded=False):
     a1, a2, a3 = st.columns(3)
     with a1:
-        st.markdown('<div class="anchor">', unsafe_allow_html=True)
-        st.markdown("**Growth history**")
-        st.write(f"5-yr revenue CAGR: **{cagr5 * 100:.1f}%**" if cagr5 is not None else "n/a")
-        c3y = h.get("rev_cagr_3y")
-        st.write(f"3-yr revenue CAGR: **{c3y * 100:.1f}%**" if c3y is not None else "")
-        st.caption("Base case near or below the 5-yr CAGR is the disciplined default — "
-                   "sustained acceleration is rare (see methodology).")
-        st.markdown("</div>", unsafe_allow_html=True)
+      with st.container(border=True):
+          st.markdown("**Growth history**")
+          st.write(f"5-yr revenue CAGR: **{cagr5 * 100:.1f}%**" if cagr5 is not None else "n/a")
+          c3y = h.get("rev_cagr_3y")
+          st.write(f"3-yr revenue CAGR: **{c3y * 100:.1f}%**" if c3y is not None else "")
+          st.caption("Base case near or below the 5-yr CAGR is the disciplined default — "
+                     "sustained acceleration is rare (see methodology).")
     with a2:
-        st.markdown('<div class="anchor">', unsafe_allow_html=True)
-        st.markdown("**Margin history**")
-        if h.get("margin_avg_5y") is not None:
-            st.write(f"5-yr avg: **{h['margin_avg_5y']:.1f}%** · range {h['margin_min_5y']:.1f}–{h['margin_max_5y']:.1f}%")
-        st.write(f"TTM: **{anchor_margin:.1f}%** · FCF margin avg: **{anchor_fcfm:.1f}%**")
-        st.caption("Margins mean-revert. A target far above the historical max needs a named reason "
-                   "(pricing power, mix shift, scale).")
-        st.markdown("</div>", unsafe_allow_html=True)
+      with st.container(border=True):
+          st.markdown("**Margin history**")
+          if h.get("margin_avg_5y") is not None:
+              st.write(f"5-yr avg: **{h['margin_avg_5y']:.1f}%** · range {h['margin_min_5y']:.1f}–{h['margin_max_5y']:.1f}%")
+          st.write(f"TTM: **{anchor_margin:.1f}%** · FCF margin avg: **{anchor_fcfm:.1f}%**")
+          st.caption("Margins mean-revert. A target far above the historical max needs a named reason "
+                     "(pricing power, mix shift, scale).")
     with a3:
-        st.markdown('<div class="anchor">', unsafe_allow_html=True)
-        st.markdown("**What the price already implies**")
-        ig = implied_growth(co["market_cap"], h.get("fcf_ttm"), r=0.10) if co.get("market_cap") else None
-        if ig is not None:
-            st.write(f"Reverse DCF: **{ig * 100:.1f}%** annual FCF growth for 5 yrs, then 2.5%, at 10% discount")
-            st.caption("If your base-case growth is *below* this, you're implicitly saying the stock is overvalued. "
-                       "If above, you see something the market doesn't — write down what.")
-        else:
-            st.write("n/a (needs positive TTM free cash flow)")
-        st.markdown("</div>", unsafe_allow_html=True)
+      with st.container(border=True):
+          st.markdown("**What the price already implies**")
+          ig = implied_growth(co["market_cap"], h.get("fcf_ttm"), r=0.10) if co.get("market_cap") else None
+          if ig is not None:
+              st.write(f"Reverse DCF: **{ig * 100:.1f}%** annual FCF growth for 5 yrs, then 2.5%, at 10% discount")
+              st.caption("If your base-case growth is *below* this, you're implicitly saying the stock is overvalued. "
+                         "If above, you see something the market doesn't — write down what.")
+          else:
+              st.write("n/a (needs positive TTM free cash flow)")
 
 # manual overrides when auto data is thin
 base = {
@@ -429,15 +423,14 @@ with t2:
     exp_ret = ev / co["price"] - 1
     mos = 1 - co["price"] / ev if ev > 0 else np.nan
 
-    st.markdown('<div class="verdict">', unsafe_allow_html=True)
-    v1, v2, v3, v4 = st.columns(4)
-    v1.metric("Expected fair value (today's $)", f"${ev:,.0f}")
-    v2.metric("Expected return", f"{exp_ret * 100:+.0f}%",
-              f"{((1 + exp_ret) ** (1 / HORIZON) - 1) * 100:+.1f}% annualized")
-    v3.metric("Margin of safety", f"{mos * 100:.0f}%" if mos == mos else "n/a",
-              "positive = discount to fair value" if (mos == mos and mos > 0) else "negative = paying a premium")
-    v4.metric("Bull / bear PV spread", f"${his['Bull']:,.0f} / ${los['Bear']:,.0f}")
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        v1, v2, v3, v4 = st.columns(4)
+        v1.metric("Expected fair value (today's $)", f"${ev:,.0f}")
+        v2.metric("Expected return", f"{exp_ret * 100:+.0f}%",
+                  f"{((1 + exp_ret) ** (1 / HORIZON) - 1) * 100:+.1f}% annualized")
+        v3.metric("Margin of safety", f"{mos * 100:.0f}%" if mos == mos else "n/a",
+                  "positive = discount to fair value" if (mos == mos and mos > 0) else "negative = paying a premium")
+        v4.metric("Bull / bear PV spread", f"${his['Bull']:,.0f} / ${los['Bear']:,.0f}")
 
     s = pd.DataFrame([{
         "Scenario": n,
