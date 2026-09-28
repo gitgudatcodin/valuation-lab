@@ -3,3 +3,4 @@ pandas>=2.0
 numpy>=1.24
 yfinance>=0.2.40
 plotly>=5.18
+matplotlib>=3.8  # required by pandas Styler.background_gradient (sensitivity heatmap)
