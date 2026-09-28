@@ -16,6 +16,8 @@ same family of models professional fundamental shops run. See
 VALUATION_METHOD.md for the research behind every choice.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -76,6 +78,8 @@ def fetch_company(ticker: str) -> dict:
         "forward_pe": info.get("forwardPE"),
         "peg": info.get("pegRatio"),
         "ttm_margin": (info.get("profitMargins") or 0) * 100,
+        "dividend_yield": info.get("dividendYield"),
+        "currency": info.get("currency"),
         "sector": info.get("sector"),
         "industry": info.get("industry"),
     }
@@ -128,12 +132,16 @@ def fetch_company(ticker: str) -> dict:
 # valuation engine
 # --------------------------------------------------------------------------
 def project(sc: dict, base: dict, years: int = HORIZON) -> pd.DataFrame:
-    """Scenario projection. Returns one row per year with revenue, net income,
-    EPS, FCF/share, target price range, present values and CAGRs."""
+    """Scenario projection. The applied P/E fades linearly from today's
+    multiple to the exit range over the horizon — multiples compress as
+    growth matures, so year-1 targets shouldn't already use the year-5
+    multiple. Target prices are masked when EPS is non-positive."""
     rows = []
     rev = base["revenue_ttm"]
     shares = base["shares"]
     r = sc["discount"] / 100.0
+    cur_pe = base.get("current_pe")
+    fade = bool(cur_pe and cur_pe > 0)
     for t in range(1, years + 1):
         rev *= 1 + sc["rev_growth"] / 100.0
         margin = sc["margin_start"] + (sc["margin_end"] - sc["margin_start"]) * t / years
@@ -142,7 +150,18 @@ def project(sc: dict, base: dict, years: int = HORIZON) -> pd.DataFrame:
         eps = ni / shares if shares else np.nan
         fcf = rev * sc["fcf_margin"] / 100.0
         fcf_ps = fcf / shares if shares else np.nan
-        p_lo, p_hi = eps * sc["pe_lo"], eps * sc["pe_hi"]
+        w = t / years
+        pe_lo_t = cur_pe + (sc["pe_lo"] - cur_pe) * w if fade else sc["pe_lo"]
+        pe_hi_t = cur_pe + (sc["pe_hi"] - cur_pe) * w if fade else sc["pe_hi"]
+        if isinstance(eps, float) and np.isfinite(eps) and eps > 0:
+            p_lo, p_hi = eps * pe_lo_t, eps * pe_hi_t
+        else:
+            p_lo = p_hi = np.nan
+        disc = (1 + r) ** t
+
+        def _cagr(p):
+            return ((p / base["price"]) ** (1 / t) - 1) * 100 if np.isfinite(p) and p > 0 else np.nan
+
         rows.append({
             "Year": t,
             "Revenue": rev,
@@ -150,12 +169,14 @@ def project(sc: dict, base: dict, years: int = HORIZON) -> pd.DataFrame:
             "Net margin %": margin,
             "EPS": eps,
             "FCF/share": fcf_ps,
+            "PE lo": pe_lo_t,
+            "PE hi": pe_hi_t,
             "Price lo": p_lo,
             "Price hi": p_hi,
-            "PV lo": p_lo / (1 + r) ** t,
-            "PV hi": p_hi / (1 + r) ** t,
-            "CAGR lo %": ((p_lo / base["price"]) ** (1 / t) - 1) * 100,
-            "CAGR hi %": ((p_hi / base["price"]) ** (1 / t) - 1) * 100,
+            "PV lo": p_lo / disc,
+            "PV hi": p_hi / disc,
+            "CAGR lo %": _cagr(p_lo),
+            "CAGR hi %": _cagr(p_hi),
         })
     return pd.DataFrame(rows)
 
@@ -189,6 +210,36 @@ def implied_growth(mktcap: float, fcf0: float, r: float = 0.10,
             hi = mid
     return (lo + hi) / 2
 
+
+# --------------------------------------------------------------------------
+# saved-scenario loading — applied before any widget exists, so values stick
+# --------------------------------------------------------------------------
+FIELD_MAP = {"rev_growth": "g", "margin_start": "ms", "margin_end": "me",
+             "fcf_margin": "fcf", "share_change": "sh", "pe_lo": "plo",
+             "pe_hi": "phi", "discount": "dr", "prob": "pr"}
+
+
+def _apply_pending_load():
+    cfg = st.session_state.pop("_pending_load", None)
+    if not cfg:
+        return
+    t = str(cfg.get("ticker", "")).strip().upper()
+    if t:
+        st.session_state["ticker"] = t
+        st.session_state["co"] = fetch_company(t)
+    tk = st.session_state.get("ticker", "AAPL")
+    for scen_key, cfg_key in (("bull", "bull"), ("base", "base"), ("bear", "bear")):
+        vals = cfg.get(cfg_key) or {}
+        for full, short in FIELD_MAP.items():
+            if full in vals:
+                try:
+                    st.session_state[f"{tk}_{scen_key}_{short}"] = vals[full]
+                except Exception:
+                    pass
+
+
+_apply_pending_load()
+
 # --------------------------------------------------------------------------
 # sidebar: ticker + company snapshot
 # --------------------------------------------------------------------------
@@ -198,8 +249,10 @@ st.caption("Scenario-based equity valuation — bull / base / bear projections, 
 
 with st.sidebar:
     st.header("Company")
-    ticker = st.text_input("Ticker", value=st.session_state.get("ticker", "AAPL")).strip().upper()
-    if st.button("Load company", type="primary") or "co" not in st.session_state:
+    with st.form("load_form"):
+        ticker = st.text_input("Ticker", value=st.session_state.get("ticker", "AAPL")).strip().upper()
+        submitted = st.form_submit_button("Load company", type="primary")
+    if submitted or "co" not in st.session_state:
         st.session_state["ticker"] = ticker
         with st.spinner(f"Fetching {ticker}…"):
             st.session_state["co"] = fetch_company(ticker)
@@ -219,7 +272,14 @@ c3.metric("Trailing P/E", f"{co['trailing_pe']:.1f}×" if co.get("trailing_pe") 
 c4.metric("TTM net margin", f"{co['ttm_margin']:.1f}%" if co.get("ttm_margin") else "n/a")
 cagr5 = h.get("rev_cagr_5y")
 c5.metric("5-yr revenue CAGR", f"{cagr5 * 100:.1f}%" if cagr5 is not None else "n/a")
-st.caption(f"**{co['name']}**" + (f" · {co['sector']} — {co['industry']}" if co.get("sector") else ""))
+extras = []
+if co.get("dividend_yield"):
+    extras.append(f"div yield {co['dividend_yield'] * 100:.1f}%")
+if co.get("currency") and co["currency"] != "USD":
+    extras.append(co["currency"])
+st.caption(f"**{co['name']}**"
+           + (f" · {co['sector']} — {co['industry']}" if co.get("sector") else "")
+           + (f" · {' · '.join(extras)}" if extras else ""))
 
 # --- auto-derived anchors ---------------------------------------------------
 anchor_rev = (h.get("rev_cagr_5y") or 0.08) * 100          # default base growth
@@ -253,6 +313,7 @@ with st.expander("📊 Auto-derived anchors — sanity checks for your inputs", 
               st.write(f"Reverse DCF: **{ig * 100:.1f}%** annual FCF growth for 5 yrs, then 2.5%, at 10% discount")
               st.caption("If your base-case growth is *below* this, you're implicitly saying the stock is overvalued. "
                          "If above, you see something the market doesn't — write down what.")
+              st.caption("The Verdict tab re-checks this at your base-case discount rate.")
           else:
               st.write("n/a (needs positive TTM free cash flow)")
 
@@ -262,6 +323,7 @@ base = {
     "revenue_ttm": h.get("revenue_ttm"),
     "shares": co.get("shares"),
     "market_cap": co.get("marketCap") or co.get("market_cap"),
+    "current_pe": co.get("trailing_pe") or co.get("forward_pe"),
 }
 needs_manual = not base["revenue_ttm"] or not base["shares"]
 if needs_manual:
@@ -275,49 +337,49 @@ base["market_cap"] = base["market_cap"] or base["price"] * base["shares"]
 # --------------------------------------------------------------------------
 # scenario inputs
 # --------------------------------------------------------------------------
-def scenario_inputs(key: str, title: str, css: str, defaults: dict) -> dict:
+def scenario_inputs(ticker: str, key: str, title: str, css: str, defaults: dict) -> dict:
     st.markdown(f'<div class="scen-{css}">{title}</div>', unsafe_allow_html=True)
     sc = {}
     sc["rev_growth"] = st.number_input("Revenue growth %/yr", -50.0, 100.0,
-                                       defaults["rev_growth"], 0.5, key=f"{key}_g",
+                                       defaults["rev_growth"], 0.5, key=f"{ticker}_{key}_g",
                                        help="Annual revenue compounding over the horizon.")
     cm1, cm2 = st.columns(2)
     sc["margin_start"] = cm1.number_input("Margin now %", -50.0, 80.0, defaults["margin_start"], 0.5,
-                                          key=f"{key}_ms", help="Defaults to TTM net margin.")
+                                          key=f"{ticker}_{key}_ms", help="Defaults to TTM net margin.")
     sc["margin_end"] = cm2.number_input(f"Margin yr{HORIZON} %", -50.0, 80.0, defaults["margin_end"], 0.5,
-                                        key=f"{key}_me", help="Where margins settle. Glides linearly.")
+                                        key=f"{ticker}_{key}_me", help="Where margins settle. Glides linearly.")
     sc["fcf_margin"] = st.number_input("FCF margin %", -50.0, 100.0, defaults["fcf_margin"], 0.5,
-                                       key=f"{key}_fcf",
+                                       key=f"{ticker}_{key}_fcf",
                                        help="Free cash flow as % of revenue. Defaults to 5-yr average.")
     sc["share_change"] = st.number_input("Share change %/yr", -15.0, 15.0, defaults["share_change"], 0.25,
-                                         key=f"{key}_sh",
+                                         key=f"{ticker}_{key}_sh",
                                          help="Negative = buybacks shrink the count (boosts EPS). -2% ≈ steady buyback.")
     p1, p2 = st.columns(2)
-    sc["pe_lo"] = p1.number_input("Exit P/E low", 1.0, 100.0, defaults["pe_lo"], 1.0, key=f"{key}_plo")
-    sc["pe_hi"] = p2.number_input("Exit P/E high", 1.0, 100.0, defaults["pe_hi"], 1.0, key=f"{key}_phi")
+    sc["pe_lo"] = p1.number_input("Exit P/E low", 1.0, 100.0, defaults["pe_lo"], 1.0, key=f"{ticker}_{key}_plo")
+    sc["pe_hi"] = p2.number_input("Exit P/E high", 1.0, 100.0, defaults["pe_hi"], 1.0, key=f"{ticker}_{key}_phi")
     sc["discount"] = st.number_input("Discount rate %", 1.0, 30.0, defaults["discount"], 0.5,
-                                     key=f"{key}_dr",
+                                     key=f"{ticker}_{key}_dr",
                                      help="Your required return. 10% is a standard equity hurdle.")
-    sc["prob"] = st.slider("Probability %", 0, 100, defaults["prob"], 5, key=f"{key}_pr")
+    sc["prob"] = st.slider("Probability %", 0, 100, defaults["prob"], 5, key=f"{ticker}_{key}_pr")
     return sc
 
 
 st.subheader("Scenario assumptions")
 s1, s2, s3 = st.columns(3)
 with s1:
-    bull = scenario_inputs("bull", "BULL CASE", "bull", {
+    bull = scenario_inputs(ticker, "bull", "BULL CASE", "bull", {
         "rev_growth": round(anchor_rev * 1.5, 1), "margin_start": round(anchor_margin, 1),
         "margin_end": round(min(anchor_margin * 1.2, 45), 1), "fcf_margin": round(anchor_fcfm, 1),
         "share_change": -2.0, "pe_lo": round(anchor_pe * 0.9, 0), "pe_hi": round(anchor_pe * 1.2, 0),
         "discount": 10.0, "prob": 25})
 with s2:
-    base_sc = scenario_inputs("base", "BASE CASE", "base", {
+    base_sc = scenario_inputs(ticker, "base", "BASE CASE", "base", {
         "rev_growth": round(anchor_rev, 1), "margin_start": round(anchor_margin, 1),
         "margin_end": round(anchor_margin, 1), "fcf_margin": round(anchor_fcfm, 1),
         "share_change": -1.0, "pe_lo": round(anchor_pe * 0.8, 0), "pe_hi": round(anchor_pe, 0),
         "discount": 10.0, "prob": 50})
 with s3:
-    bear = scenario_inputs("bear", "BEAR CASE", "bear", {
+    bear = scenario_inputs(ticker, "bear", "BEAR CASE", "bear", {
         "rev_growth": round(anchor_rev * 0.3, 1), "margin_start": round(anchor_margin, 1),
         "margin_end": round(anchor_margin * 0.8, 1), "fcf_margin": round(anchor_fcfm * 0.8, 1),
         "share_change": 0.0, "pe_lo": round(anchor_pe * 0.55, 0), "pe_hi": round(anchor_pe * 0.75, 0),
@@ -328,6 +390,32 @@ for sc in (bull, base_sc, bear):
         st.warning("Exit P/E low exceeds high in one scenario — swap them.")
         st.stop()
 
+gmax = max(bull["rev_growth"], base_sc["rev_growth"], bear["rev_growth"])
+if gmax > 30:
+    st.warning(f"One scenario assumes **{gmax:.0f}%** yearly revenue growth for {HORIZON} years. "
+               "Sustained >30% growth is extremely rare — make sure there's a named reason (see Methodology).")
+
+st.divider()
+sv1, sv2 = st.columns(2)
+with sv1:
+    st.download_button("💾 Save scenarios",
+                       data=json.dumps({"ticker": ticker, "bull": bull,
+                                        "base": base_sc, "bear": bear}, indent=2),
+                       file_name=f"{ticker}_valuation_scenarios.json",
+                       mime="application/json", use_container_width=True)
+with sv2:
+    up = st.file_uploader("📂 Load scenarios", type="json")
+    if up is not None and st.session_state.get("_loaded_file") != up.name:
+        try:
+            _loaded = json.load(up)
+        except Exception:
+            st.error("Couldn't parse that file — is it a scenarios JSON saved from this app?")
+            _loaded = None
+        if _loaded:
+            st.session_state["_pending_load"] = _loaded
+            st.session_state["_loaded_file"] = up.name
+            st.rerun()
+
 # --------------------------------------------------------------------------
 # compute
 # --------------------------------------------------------------------------
@@ -337,11 +425,30 @@ years = [str(pd.Timestamp.now().year + int(y)) for y in proj["Base"]["Year"]]
 t1, t2, t3 = st.tabs(["📈 Projections", "⚖️ Verdict", "📚 Methodology"])
 
 
+def _money(x) -> str:
+    if not isinstance(x, (int, float)) or not np.isfinite(x):
+        return "n/a"
+    ax = abs(x)
+    if ax >= 1e9:
+        return f"${x / 1e9:,.1f}B"
+    if ax >= 1e6:
+        return f"${x / 1e6:,.1f}M"
+    return f"${x:,.0f}"
+
+
+def _px(x) -> str:
+    return f"${x:,.0f}" if isinstance(x, (int, float)) and np.isfinite(x) and x > 0 else "n/a"
+
+
+def _pct1(x) -> str:
+    return f"{x:+.0f}%" if isinstance(x, (int, float)) and np.isfinite(x) else "n/a"
+
+
 def fmt_grid(df: pd.DataFrame) -> pd.DataFrame:
     """Screenshot-style grid: metrics as rows, years as columns."""
     g = pd.DataFrame(index=[
         "REVENUE", "REV GROWTH", "NET INCOME", "NET INC. GROWTH", "NET INC. MARGINS",
-        "EPS", "FCF / SHARE", "PE LOW EST", "PE HIGH EST",
+        "EPS", "FCF / SHARE", "APPLIED P/E LOW", "APPLIED P/E HIGH",
         "SHARE PRICE LOW", "SHARE PRICE HIGH", "PV LOW (today's $)", "PV HIGH (today's $)",
         "CAGR LOW", "CAGR HIGH",
     ])
@@ -350,26 +457,24 @@ def fmt_grid(df: pd.DataFrame) -> pd.DataFrame:
     for i, y in enumerate(years):
         r = df.iloc[i]
         g[y] = [
-            f"${r['Revenue'] / 1e9:,.1f}B",
-            f"{rev_g.iloc[i]:.0f}%" if i else "—",
-            f"${r['Net income'] / 1e9:,.1f}B",
-            f"{ni_g.iloc[i]:.0f}%" if i else "—",
+            _money(r["Revenue"]),
+            f"{rev_g.iloc[i]:.0f}%" if i and np.isfinite(rev_g.iloc[i]) else "—",
+            _money(r["Net income"]),
+            f"{ni_g.iloc[i]:.0f}%" if i and np.isfinite(ni_g.iloc[i]) else "—",
             f"{r['Net margin %']:.0f}%",
-            f"${r['EPS']:.2f}",
-            f"${r['FCF/share']:.2f}",
-            f"{sc_map[name]['pe_lo']:.0f}",
-            f"{sc_map[name]['pe_hi']:.0f}",
-            f"${r['Price lo']:,.0f}",
-            f"${r['Price hi']:,.0f}",
-            f"${r['PV lo']:,.0f}",
-            f"${r['PV hi']:,.0f}",
-            f"{r['CAGR lo %']:+.0f}%",
-            f"{r['CAGR hi %']:+.0f}%",
+            f"${r['EPS']:,.2f}" if np.isfinite(r["EPS"]) else "n/a",
+            f"${r['FCF/share']:,.2f}" if np.isfinite(r["FCF/share"]) else "n/a",
+            f"{r['PE lo']:.1f}×",
+            f"{r['PE hi']:.1f}×",
+            _px(r["Price lo"]),
+            _px(r["Price hi"]),
+            _px(r["PV lo"]),
+            _px(r["PV hi"]),
+            _pct1(r["CAGR lo %"]),
+            _pct1(r["CAGR hi %"]),
         ]
     return g
 
-
-sc_map = {"Bull": bull, "Base": base_sc, "Bear": bear}
 
 with t1:
     st.subheader(f"Multi-year projections — {co['ticker']} @ ${co['price']:,.2f}")
@@ -402,8 +507,10 @@ with t1:
                       xaxis_title="Year", yaxis_title="Share price ($)",
                       legend=dict(orientation="h", y=1.08))
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("Bands = EPS × exit P/E range each year. The dashed line is today's price — "
-               "everything above it is your required growth story.")
+    cur_pe_txt = f"{base['current_pe']:.1f}×" if base.get("current_pe") else "n/a"
+    st.caption(f"Bands = EPS × P/E each year, with the P/E fading from today's {cur_pe_txt} "
+               f"to your exit range over {HORIZON} years (multiples compress as growth matures). "
+               "The dashed line is today's price — everything above it is your required growth story.")
 
 with t2:
     st.subheader("Probability-weighted verdict")
@@ -414,12 +521,22 @@ with t2:
     probs /= probs.sum()
 
     # expected present value using each scenario's midpoint PV at horizon
+    names = ("Bull", "Base", "Bear")
     mids, los, his = {}, {}, {}
-    for name, p in zip(("Bull", "Base", "Bear"), probs):
+    for name, p in zip(names, probs):
         df = proj[name]
         lo, hi = df["PV lo"].iloc[-1], df["PV hi"].iloc[-1]
-        los[name], his[name], mids[name] = lo, hi, (lo + hi) / 2
-    ev = sum(mids[n] * p for n, p in zip(("Bull", "Base", "Bear"), probs))
+        los[name], his[name] = lo, hi
+        mids[name] = (lo + hi) / 2 if np.isfinite(lo) and np.isfinite(hi) and hi > 0 else np.nan
+    valid = [(n, p) for n, p in zip(names, probs) if np.isfinite(mids[n]) and mids[n] > 0]
+    if "Base" not in [n for n, _ in valid]:
+        st.error("The base case ends with non-positive year-5 EPS — no fair value can be computed. "
+                 "Raise growth/margins or lower the bar.")
+        st.stop()
+    wsum = sum(p for _, p in valid)
+    ev = sum(mids[n] * p / wsum for n, p in valid)
+    if len(valid) < 3:
+        st.info("A scenario produced non-positive year-5 EPS and was excluded from the weighting.")
     exp_ret = ev / co["price"] - 1
     mos = 1 - co["price"] / ev if ev > 0 else np.nan
 
@@ -431,6 +548,12 @@ with t2:
         v3.metric("Margin of safety", f"{mos * 100:.0f}%" if mos == mos else "n/a",
                   "positive = discount to fair value" if (mos == mos and mos > 0) else "negative = paying a premium")
         v4.metric("Bull / bear PV spread", f"${his['Bull']:,.0f} / ${los['Bear']:,.0f}")
+
+    dy = co.get("dividend_yield") or 0
+    if dy > 0:
+        tot_ret = (1 + exp_ret) * (1 + dy) ** HORIZON - 1
+        st.caption(f"Dividends ≈ {dy * 100:.1f}%/yr → total expected return ≈ {tot_ret * 100:+.0f}% "
+                   "(rough — assumes the payout is maintained)")
 
     s = pd.DataFrame([{
         "Scenario": n,
@@ -456,10 +579,12 @@ with t2:
     st.caption("Green = above today's price. If most of the grid is red, the thesis needs heroic assumptions.")
 
     st.subheader("Reality check")
-    ig = implied_growth(co["market_cap"], h.get("fcf_ttm"), r=0.10) if co.get("market_cap") else None
+    bdr = base_sc["discount"]
+    ig = implied_growth(co["market_cap"], h.get("fcf_ttm"), r=bdr / 100) if co.get("market_cap") else None
     if ig is not None:
-        st.write(f"The current price implies **{ig * 100:.1f}%** annual FCF growth for {HORIZON} years "
-                 f"(10% discount, 2.5% terminal). Your scenarios assume revenue growth of "
+        st.write(f"At your **{bdr:.0f}%** base-case discount rate, the current price implies "
+                 f"**{ig * 100:.1f}%** annual FCF growth for {HORIZON} years (2.5% terminal). "
+                 f"Your scenarios assume revenue growth of "
                  f"**{bear['rev_growth']:.0f}% / {base_sc['rev_growth']:.0f}% / {bull['rev_growth']:.0f}%** (bear/base/bull).")
         if base_sc["rev_growth"] / 100 < ig - 0.02:
             st.warning("Your base case grows *slower* than what the price already implies — "
@@ -490,6 +615,9 @@ with t3:
 - **Buybacks — don't ignore them.** A steady -2%/yr share shrink adds ~2 points to annual EPS growth for free. Check the 10-K: has the share count actually been falling?
 - **Discount rate — your hurdle, not theirs.** 10% is the standard equity hurdle; use higher for leveraged, cyclical, or story stocks. This is where risk lives in the model.
 - **Probabilities — the base shouldn't be 80%.** If you can't imagine the bear case, you haven't thought about the business. 25/50/25 is a disciplined default.
+
+- **Multiple fade.** The P/E applied each year fades linearly from today's trailing P/E to your exit range — multiples compress as growth matures, so year-1 targets don't already use the year-5 multiple. If the company has no meaningful trailing P/E, the exit range is applied flat.
+- **Total return.** Price CAGRs exclude dividends; the Verdict adds the dividend yield back as a rough total-return figure. For a 3%-yielder that's ~16 points over five years — not a rounding error.
 
 **What this model deliberately does NOT do:** no terminal-value DCF with a perpetual growth guess (the terminal value usually drives 70%+ of a DCF and is the least knowable input — here the exit multiple carries that weight transparently); no quarterly precision theater; no Monte Carlo (three honest scenarios beat 10,000 draws from made-up distributions).
 

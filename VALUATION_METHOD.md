@@ -66,6 +66,11 @@ The exit P/E is where most price targets are secretly decided. Discipline it:
   forward forever.
 - Growth stocks deserve higher multiples *only while the growth lasts*;
   the exit multiple should reflect year-5 maturity, not year-1 excitement.
+- **Multiple fade**: the app applies a P/E that fades linearly from today's
+  trailing multiple to your exit range across the horizon, rather than
+  stamping the year-5 multiple onto year 1. This matches how multiples
+  actually behave — compression as growth matures — and avoids understating
+  near-term targets for stocks trading rich today.
 
 ## 5. The discount rate — your hurdle, not theirs
 

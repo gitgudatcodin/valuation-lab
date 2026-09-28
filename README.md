@@ -13,6 +13,9 @@ probability-weighted fair value.
 - Discounts future prices to **present value** (a dollar in 2030 ≠ a dollar today)
 - **Buybacks/dilution** flow through to EPS (a -2%/yr shrink ≈ +2pts annual EPS growth)
 - Margins **glide** from today's level to your target instead of assuming a flat number
+- The applied P/E **fades** from today's multiple to your exit range (multiples compress as growth matures)
+- **Save/load** scenario sets as JSON (the LOAD/SAVE buttons)
+- Dividend yield folded into a rough **total return** figure
 - **Reverse DCF anchor**: shows what FCF growth the current price already implies,
   so you can see when your base case is braver (or more timid) than the market
 - **Sensitivity grid** and probability weighting with an honest default (25/50/25)
