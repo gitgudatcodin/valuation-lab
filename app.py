@@ -402,7 +402,7 @@ with sv1:
                        data=json.dumps({"ticker": ticker, "bull": bull,
                                         "base": base_sc, "bear": bear}, indent=2),
                        file_name=f"{ticker}_valuation_scenarios.json",
-                       mime="application/json", use_container_width=True)
+                       mime="application/json", width="stretch")
 with sv2:
     up = st.file_uploader("📂 Load scenarios", type="json")
     if up is not None and st.session_state.get("_loaded_file") != up.name:
@@ -481,7 +481,7 @@ with t1:
     for name in ("Bull", "Base", "Bear"):
         css = {"Bull": "bull", "Base": "base", "Bear": "bear"}[name]
         st.markdown(f'<div class="scen-{css}">{name.upper()} CASE</div>', unsafe_allow_html=True)
-        st.dataframe(fmt_grid(proj[name]), use_container_width=True)
+        st.dataframe(fmt_grid(proj[name]), width="stretch")
 
     # fan chart
     st.subheader("Price fan chart")
@@ -506,7 +506,7 @@ with t1:
                       plot_bgcolor="rgba(0,0,0,0)", height=420,
                       xaxis_title="Year", yaxis_title="Share price ($)",
                       legend=dict(orientation="h", y=1.08))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     cur_pe_txt = f"{base['current_pe']:.1f}×" if base.get("current_pe") else "n/a"
     st.caption(f"Bands = EPS × P/E each year, with the P/E fading from today's {cur_pe_txt} "
                f"to your exit range over {HORIZON} years (multiples compress as growth matures). "
@@ -561,7 +561,7 @@ with t2:
         f"PV range yr{HORIZON}": f"${los[n]:,.0f} – ${his[n]:,.0f}",
         "Implied CAGR": f"{proj[n]['CAGR lo %'].iloc[-1]:+.0f}% to {proj[n]['CAGR hi %'].iloc[-1]:+.0f}%",
     } for n, p in zip(("Bull", "Base", "Bear"), probs)])
-    st.dataframe(s, use_container_width=True, hide_index=True)
+    st.dataframe(s, width="stretch", hide_index=True)
 
     st.subheader("Sensitivity — base case fair value (PV midpoint) in today's $")
     pe_range = np.linspace(max(5, base_sc["pe_lo"] - 5), base_sc["pe_hi"] + 5, 5)
@@ -575,7 +575,7 @@ with t2:
             sc2 = dict(base_sc, rev_growth=float(g), pe_lo=float(pe), pe_hi=float(pe))
             d2 = project(sc2, base)
             sens.iloc[i, j] = (d2["PV lo"].iloc[-1] + d2["PV hi"].iloc[-1]) / 2
-    st.dataframe(sens.style.format("${:,.0f}").background_gradient(cmap="RdYlGn"), use_container_width=True)
+    st.dataframe(sens.style.format("${:,.0f}").background_gradient(cmap="RdYlGn"), width="stretch")
     st.caption("Green = above today's price. If most of the grid is red, the thesis needs heroic assumptions.")
 
     st.subheader("Reality check")
