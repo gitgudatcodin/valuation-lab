@@ -250,13 +250,16 @@ st.caption("Scenario-based equity valuation — bull / base / bear projections, 
 with st.sidebar:
     st.header("Company")
     with st.form("load_form"):
-        ticker = st.text_input("Ticker", value=st.session_state.get("ticker", "AAPL")).strip().upper()
+        st.text_input("Ticker", value=st.session_state.get("ticker", "AAPL"),
+                      key="ticker_box")
         submitted = st.form_submit_button("Load company", type="primary")
     if submitted or "co" not in st.session_state:
+        ticker = st.session_state["ticker_box"].strip().upper()
         st.session_state["ticker"] = ticker
         with st.spinner(f"Fetching {ticker}…"):
             st.session_state["co"] = fetch_company(ticker)
     co = st.session_state.get("co", {})
+    ticker = st.session_state.get("ticker", "AAPL")
 
 if co.get("error"):
     st.error(co["error"])
@@ -338,26 +341,39 @@ base["market_cap"] = base["market_cap"] or base["price"] * base["shares"]
 # scenario inputs
 # --------------------------------------------------------------------------
 def scenario_inputs(ticker: str, key: str, title: str, css: str, defaults: dict) -> dict:
+    """Scenario widgets show exactly the computed anchors — no bounds, no
+    clipping. What the data says is what you see; edit freely."""
     st.markdown(f'<div class="scen-{css}">{title}</div>', unsafe_allow_html=True)
+    d = {k: float(v) for k, v in defaults.items()}  # number_input needs value/step types to match
     sc = {}
-    sc["rev_growth"] = st.number_input("Revenue growth %/yr", -50.0, 100.0,
-                                       defaults["rev_growth"], 0.5, key=f"{ticker}_{key}_g",
+    sc["rev_growth"] = st.number_input("Revenue growth %/yr", None, None,
+                                       d["rev_growth"], 0.5,
+                                       key=f"{ticker}_{key}_g",
                                        help="Annual revenue compounding over the horizon.")
     cm1, cm2 = st.columns(2)
-    sc["margin_start"] = cm1.number_input("Margin now %", -50.0, 80.0, defaults["margin_start"], 0.5,
+    sc["margin_start"] = cm1.number_input("Margin now %", None, None,
+                                          d["margin_start"], 0.5,
                                           key=f"{ticker}_{key}_ms", help="Defaults to TTM net margin.")
-    sc["margin_end"] = cm2.number_input(f"Margin yr{HORIZON} %", -50.0, 80.0, defaults["margin_end"], 0.5,
+    sc["margin_end"] = cm2.number_input(f"Margin yr{HORIZON} %", None, None,
+                                        d["margin_end"], 0.5,
                                         key=f"{ticker}_{key}_me", help="Where margins settle. Glides linearly.")
-    sc["fcf_margin"] = st.number_input("FCF margin %", -50.0, 100.0, defaults["fcf_margin"], 0.5,
+    sc["fcf_margin"] = st.number_input("FCF margin %", None, None,
+                                       d["fcf_margin"], 0.5,
                                        key=f"{ticker}_{key}_fcf",
                                        help="Free cash flow as % of revenue. Defaults to 5-yr average.")
-    sc["share_change"] = st.number_input("Share change %/yr", -15.0, 15.0, defaults["share_change"], 0.25,
+    sc["share_change"] = st.number_input("Share change %/yr", None, None,
+                                         d["share_change"], 0.25,
                                          key=f"{ticker}_{key}_sh",
                                          help="Negative = buybacks shrink the count (boosts EPS). -2% ≈ steady buyback.")
     p1, p2 = st.columns(2)
-    sc["pe_lo"] = p1.number_input("Exit P/E low", 1.0, 100.0, defaults["pe_lo"], 1.0, key=f"{ticker}_{key}_plo")
-    sc["pe_hi"] = p2.number_input("Exit P/E high", 1.0, 100.0, defaults["pe_hi"], 1.0, key=f"{ticker}_{key}_phi")
-    sc["discount"] = st.number_input("Discount rate %", 1.0, 30.0, defaults["discount"], 0.5,
+    sc["pe_lo"] = p1.number_input("Exit P/E low", None, None,
+                                  d["pe_lo"], 1.0,
+                                  key=f"{ticker}_{key}_plo")
+    sc["pe_hi"] = p2.number_input("Exit P/E high", None, None,
+                                  d["pe_hi"], 1.0,
+                                  key=f"{ticker}_{key}_phi")
+    sc["discount"] = st.number_input("Discount rate %", None, None,
+                                     d["discount"], 0.5,
                                      key=f"{ticker}_{key}_dr",
                                      help="Your required return. 10% is a standard equity hurdle.")
     sc["prob"] = st.slider("Probability %", 0, 100, defaults["prob"], 5, key=f"{ticker}_{key}_pr")
@@ -402,7 +418,7 @@ with sv1:
                        data=json.dumps({"ticker": ticker, "bull": bull,
                                         "base": base_sc, "bear": bear}, indent=2),
                        file_name=f"{ticker}_valuation_scenarios.json",
-                       mime="application/json", width="stretch")
+                       mime="application/json", use_container_width=True)
 with sv2:
     up = st.file_uploader("📂 Load scenarios", type="json")
     if up is not None and st.session_state.get("_loaded_file") != up.name:
@@ -481,7 +497,7 @@ with t1:
     for name in ("Bull", "Base", "Bear"):
         css = {"Bull": "bull", "Base": "base", "Bear": "bear"}[name]
         st.markdown(f'<div class="scen-{css}">{name.upper()} CASE</div>', unsafe_allow_html=True)
-        st.dataframe(fmt_grid(proj[name]), width="stretch")
+        st.dataframe(fmt_grid(proj[name]), use_container_width=True)
 
     # fan chart
     st.subheader("Price fan chart")
@@ -506,7 +522,7 @@ with t1:
                       plot_bgcolor="rgba(0,0,0,0)", height=420,
                       xaxis_title="Year", yaxis_title="Share price ($)",
                       legend=dict(orientation="h", y=1.08))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
     cur_pe_txt = f"{base['current_pe']:.1f}×" if base.get("current_pe") else "n/a"
     st.caption(f"Bands = EPS × P/E each year, with the P/E fading from today's {cur_pe_txt} "
                f"to your exit range over {HORIZON} years (multiples compress as growth matures). "
@@ -561,7 +577,7 @@ with t2:
         f"PV range yr{HORIZON}": f"${los[n]:,.0f} – ${his[n]:,.0f}",
         "Implied CAGR": f"{proj[n]['CAGR lo %'].iloc[-1]:+.0f}% to {proj[n]['CAGR hi %'].iloc[-1]:+.0f}%",
     } for n, p in zip(("Bull", "Base", "Bear"), probs)])
-    st.dataframe(s, width="stretch", hide_index=True)
+    st.dataframe(s, use_container_width=True, hide_index=True)
 
     st.subheader("Sensitivity — base case fair value (PV midpoint) in today's $")
     pe_range = np.linspace(max(5, base_sc["pe_lo"] - 5), base_sc["pe_hi"] + 5, 5)
@@ -575,7 +591,7 @@ with t2:
             sc2 = dict(base_sc, rev_growth=float(g), pe_lo=float(pe), pe_hi=float(pe))
             d2 = project(sc2, base)
             sens.iloc[i, j] = (d2["PV lo"].iloc[-1] + d2["PV hi"].iloc[-1]) / 2
-    st.dataframe(sens.style.format("${:,.0f}").background_gradient(cmap="RdYlGn"), width="stretch")
+    st.dataframe(sens.style.format("${:,.0f}").background_gradient(cmap="RdYlGn"), use_container_width=True)
     st.caption("Green = above today's price. If most of the grid is red, the thesis needs heroic assumptions.")
 
     st.subheader("Reality check")
